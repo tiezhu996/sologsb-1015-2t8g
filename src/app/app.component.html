@@ -40,7 +40,7 @@
     </nz-select>
     <div class="issue-pills">
       <nz-tag nzColor="error">{{ totalErrors }} 处出律</nz-tag>
-      <nz-tag nzColor="warning">{{ totalWarnings }} 处待核</nz-tag>
+      <nz-tag nzColor="warning">{{ store.queueStats().pending }} 条待核</nz-tag>
       <nz-tag>{{ store.differences().length }} 处异文</nz-tag>
     </div>
   </section>
@@ -185,26 +185,126 @@
       </div>
     </nz-tab>
 
-    <nz-tab nzTitle="格律与对仗">
+    <nz-tab>
+      <ng-template nz-tab-title>
+        <span class="tab-title">待核队列
+          @if (store.queueStats().pending > 0) { <em class="tab-badge">{{ store.queueStats().pending }}</em> }
+        </span>
+      </ng-template>
       <div class="audit-layout">
         <section class="surface audit-main">
-          <div class="section-title">
-            <div><span class="overline">METER AUDIT</span><h2>检查结果</h2></div>
-            <nz-tag nzColor="processing">{{ store.issues().length }} 条记录</nz-tag>
+          <div class="section-title queue-header">
+            <div><span class="overline">REVIEW QUEUE</span><h2>待核队列</h2></div>
+            <div class="queue-summary">
+              <nz-tag nzColor="warning">{{ store.queueStats().pending }} 待核</nz-tag>
+              <nz-tag nzColor="success">{{ store.queueStats().resolved }} 已处理</nz-tag>
+              <nz-tag nzColor="orange">{{ store.queueStats().ignored }} 已忽略</nz-tag>
+            </div>
+          </div>
+          <div class="queue-progress">
+            <nz-progress
+              [nzPercent]="store.queueStats().percent"
+              nzStrokeColor="#3f7c6c"
+              [nzStrokeWidth]="10"
+            ></nz-progress>
+            <span>共 {{ store.queueStats().total }} 条，已核对 {{ store.queueStats().reviewed }} 条，完成 {{ store.queueStats().percent }}%</span>
+          </div>
+          <div class="reviewer-line">
+            <label>当班校对署名</label>
+            <input
+              nz-input
+              placeholder="输入姓名，处理记录将以此署名交接"
+              [ngModel]="store.workspace().reviewer"
+              (ngModelChange)="store.setReviewer($event)"
+            />
+            <small>处理过的问题与忽略原因会保留在对应版本中，换班时可直接按“待核”筛选。</small>
+          </div>
+          <div class="queue-filters">
+            @for (filter of filters; track filter.value) {
+              <button
+                nz-button
+                nzSize="small"
+                [nzType]="queueFilter() === filter.value ? 'primary' : 'default'"
+                (click)="setQueueFilter(filter.value)"
+              >
+                {{ filter.label }}
+                @if (filter.value !== 'all') {
+                  <em class="filter-count">{{ filter.value === 'pending' ? store.queueStats().pending : filter.value === 'resolved' ? store.queueStats().resolved : store.queueStats().ignored }}</em>
+                } @else {
+                  <em class="filter-count">{{ store.queueStats().total }}</em>
+                }
+              </button>
+            }
           </div>
           <div class="issue-list">
-            @for (issue of store.issues(); track issue.id) {
-              <button
+            @for (item of filteredQueue(); track item.issue.key; let first = $first) {
+              @if (first && queueFilter() === 'all') {
+                <div class="info-strip">
+                  @for (info of store.infoIssues(); track info.key) {
+                    <nz-alert
+                      [nzType]="info.key === 'info:meter-ok' ? 'success' : 'info'"
+                      nzShowIcon
+                      [nzMessage]="info.title"
+                      [nzDescription]="info.detail"
+                    ></nz-alert>
+                  }
+                </div>
+              }
+              <article
                 class="issue-row"
-                [class.level-error]="issue.level === 'error'"
-                [class.level-warning]="issue.level === 'warning'"
-                [class.level-info]="issue.level === 'info'"
-                (click)="issue.line !== undefined && store.selectCell(issue.line, issue.position || 0)"
+                [class.level-error]="item.issue.level === 'error'"
+                [class.level-warning]="item.issue.level === 'warning'"
+                [class.is-pending]="item.status === 'pending'"
+                [class.is-resolved]="item.status === 'resolved'"
+                [class.is-ignored]="item.status === 'ignored'"
               >
-                <span class="issue-symbol">{{ issue.level === 'error' ? '出' : issue.level === 'warning' ? '核' : '合' }}</span>
-                <span><strong>{{ issue.title }}</strong><small>{{ issue.detail }}</small></span>
-                @if (issue.line !== undefined) { <em>定位第 {{ issue.line + 1 }} 句</em> }
-              </button>
+                <button class="issue-main" (click)="locateIssue(item.issue)">
+                  <span class="issue-symbol">{{ item.issue.level === 'error' ? '出' : '核' }}</span>
+                  <span class="issue-body">
+                    <strong>{{ item.issue.title }}</strong>
+                    <small>{{ item.issue.detail }}</small>
+                    @if (item.decision) {
+                      <small class="decision-line">
+                        <b class="decision-by">{{ item.decision.by }}</b>
+                        <i>{{ formatStamp(item.decision.at) }}</i>
+                        <span class="decision-reason">说明：{{ item.decision.reason }}</span>
+                      </small>
+                    }
+                  </span>
+                  @if (item.issue.line !== undefined) { <em class="issue-loc">第 {{ item.issue.line + 1 }} 句</em> }
+                </button>
+                <div class="issue-side">
+                  <nz-tag [nzColor]="item.status === 'pending' ? 'warning' : item.status === 'resolved' ? 'success' : 'orange'">
+                    {{ statusLabel[item.status] }}
+                  </nz-tag>
+                  @if (item.status === 'pending') {
+                    <button nz-button nzSize="small" nzType="primary" (click)="markResolved(item)">已处理</button>
+                    <button nz-button nzSize="small" (click)="startIgnore(item)">忽略</button>
+                  } @else {
+                    <button nz-button nzSize="small" nzType="text" (click)="reopen(item)">重新待核</button>
+                  }
+                </div>
+                @if (ignoringKey() === item.issue.key) {
+                  <div class="ignore-box" (click)="$event.stopPropagation()">
+                    <textarea
+                      nz-input
+                      rows="2"
+                      placeholder="忽略原因（必填，下一班按此交接，不能为空）"
+                      [ngModel]="ignoreReason()"
+                      (ngModelChange)="ignoreReason.set($event)"
+                    ></textarea>
+                    <div class="ignore-actions">
+                      <small class="ignore-error">{{ ignoreError() }}</small>
+                      <button nz-button nzSize="small" (click)="cancelIgnore()">取消</button>
+                      <button nz-button nzSize="small" nzType="primary" [disabled]="!ignoreReason().trim()" (click)="confirmIgnore()">确认忽略</button>
+                    </div>
+                  </div>
+                }
+              </article>
+            } @empty {
+              <nz-empty
+                [nzNotFoundContent]="queueFilter() === 'pending' ? '当前没有待核问题，可交接给下一班' : '该筛选下暂无记录'"
+              ></nz-empty>
             }
           </div>
         </section>
@@ -304,7 +404,7 @@
         <aside class="surface export-panel">
           <span class="overline">PROOFREAD EXPORT</span>
           <h2>导出校对稿</h2>
-          <p>包含逐字平仄、韵组、判断依据、出律提示与对仗记录。</p>
+          <p>包含逐字平仄、韵组、判断依据，以及待核队列中每条问题的处理状态、忽略原因、处理人与时间。</p>
           <button nz-button nzType="primary" nzSize="large" nzBlock (click)="store.downloadProofreadCopy()">导出 Markdown 校对稿</button>
           <nz-divider></nz-divider>
           <label class="field-label">当前底本说明</label>

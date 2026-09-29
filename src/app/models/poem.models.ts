@@ -9,6 +9,17 @@ export interface CharacterMark {
   note: string;
 }
 
+export type ReviewStatus = 'pending' | 'resolved' | 'ignored';
+
+export interface ReviewDecision {
+  status: 'resolved' | 'ignored';
+  reason: string;
+  by: string;
+  at: string;
+}
+
+export type ReviewQueue = Record<string, ReviewDecision>;
+
 export interface PoemVersion {
   id: string;
   name: string;
@@ -17,6 +28,7 @@ export interface PoemVersion {
   text: string;
   marks: Record<string, CharacterMark>;
   antithesisPairs: AntithesisPair[];
+  reviewQueue: ReviewQueue;
 }
 
 export interface AntithesisPair {
@@ -30,6 +42,7 @@ export interface PoemWorkspace {
   title: string;
   author: string;
   templateId: string;
+  reviewer: string;
   versions: PoemVersion[];
   activeVersionId: string;
   updatedAt: string;
@@ -64,7 +77,7 @@ export interface AnalysisLine {
 }
 
 export interface PoemIssue {
-  id: string;
+  key: string;
   level: 'error' | 'warning' | 'info';
   title: string;
   detail: string;

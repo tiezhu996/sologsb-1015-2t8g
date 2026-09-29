@@ -1,8 +1,8 @@
 import { computed, Injectable, signal } from '@angular/core';
 import type {
-  AntithesisPair,
   AnalysisCell,
   AnalysisLine,
+  AntithesisPair,
   CharacterMark,
   CharDiff,
   MarkTone,
@@ -10,6 +10,8 @@ import type {
   PoemIssue,
   PoemVersion,
   PoemWorkspace,
+  ReviewDecision,
+  ReviewStatus,
   Tone,
 } from '../models/poem.models';
 
@@ -52,7 +54,7 @@ export const METER_TEMPLATES: MeterTemplate[] = [
   },
 ];
 
-const STORAGE_KEY = 'sologsb-1015-poetry-workspace-v1';
+export const STORAGE_KEY = 'sologsb-1015-poetry-workspace-v1';
 const PUNCTUATION = new Set(['，', '。', '！', '？', '；', '：', '、', ' ', '\t']);
 const TONE_DICTIONARY: Record<string, Tone> = {
   春: '平', 眠: '平', 不: '仄', 觉: '仄', 晓: '仄', 处: '仄', 闻: '平', 啼: '平', 鸟: '仄',
@@ -66,6 +68,13 @@ const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.ran
 
 function key(line: number, position: number): string {
   return `${line}:${position}`;
+}
+
+export function formatStamp(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function defaultMark(): CharacterMark {
@@ -95,6 +104,7 @@ function initialWorkspace(): PoemWorkspace {
     text: variants,
     marks,
     antithesisPairs: [],
+    reviewQueue: {},
   };
   const variant: PoemVersion = {
     id: 'version-song',
@@ -104,11 +114,13 @@ function initialWorkspace(): PoemWorkspace {
     text: '春眠不觉晓，\n处处闻啼鸟。\n夜来风雨声，\n花落知多少。',
     marks: clone(marks),
     antithesisPairs: [],
+    reviewQueue: {},
   };
   return {
     title: '春晓',
     author: '孟浩然',
     templateId: 'wuyan-zeqi',
+    reviewer: '',
     versions: [topVersion, variant],
     activeVersionId: topVersion.id,
     updatedAt: now,
@@ -120,7 +132,12 @@ function loadWorkspace(): PoemWorkspace {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return initialWorkspace();
     const parsed = JSON.parse(raw) as PoemWorkspace;
-    return parsed.versions?.length ? parsed : initialWorkspace();
+    if (!parsed.versions?.length) return initialWorkspace();
+    parsed.reviewer ??= '';
+    parsed.versions.forEach((version) => {
+      version.reviewQueue ??= {};
+    });
+    return parsed;
   } catch {
     return initialWorkspace();
   }
@@ -152,14 +169,17 @@ export class PoetryStoreService {
   readonly lines = computed(() => this.activeVersion().text.split('\n'));
 
   readonly analysis = computed<AnalysisLine[]>(() => {
-    const version = this.activeVersion();
-    const template = this.template();
-    return this.lines().map((line, lineIndex) => {
+    return this.buildAnalysis(this.activeVersion(), this.template());
+  });
+
+  private buildAnalysis(version: PoemVersion, template: MeterTemplate): AnalysisLine[] {
+    return version.text.split('\n').map((line, lineIndex) => {
       const chars = Array.from(line).filter((char) => !PUNCTUATION.has(char));
       const cells: AnalysisCell[] = chars.map((char, position) => {
         const mark = version.marks[key(lineIndex, position)] ?? defaultMark();
         const expected = template.pattern[lineIndex * template.lineLength + position] ?? '中';
-        const actual = mark.tone === '?' ? (TONE_DICTIONARY[char] ?? '?') : mark.tone;
+        const fromDictionary = TONE_DICTIONARY[char];
+        const actual = mark.tone === '?' ? (fromDictionary ?? '?') : mark.tone;
         let status: AnalysisCell['status'] = 'neutral';
         let message = '标点或不计律位置';
         if (PUNCTUATION.has(char)) {
@@ -191,49 +211,155 @@ export class PoetryStoreService {
         variants: cells.filter((cell) => cell.status === 'variant').length,
       };
     });
-  });
+  }
 
   readonly issues = computed<PoemIssue[]>(() => {
-    const analysis = this.analysis();
-    const version = this.activeVersion();
-    const template = this.template();
+    return this.buildIssues(this.activeVersion(), this.template());
+  });
+
+  private buildIssues(version: PoemVersion, template: MeterTemplate): PoemIssue[] {
+    const analysis = this.buildAnalysis(version, template);
     const issues: PoemIssue[] = [];
     analysis.forEach((line) => {
-      line.cells.filter((cell) => cell.status === 'error').forEach((cell) => {
+      line.cells.forEach((cell) => {
+        if (cell.status === 'error') {
+          issues.push({
+            key: `error:meter:${line.index}:${cell.position}:${cell.char}:${cell.actual}→${cell.expected}`,
+            level: 'error',
+            title: '出律位置',
+            detail: `第 ${line.index + 1} 句第 ${cell.position + 1} 字“${cell.char}”（${cell.actual}声）：${cell.message}`,
+            line: line.index,
+            position: cell.position,
+          });
+        }
+        if (cell.status === 'unknown') {
+          issues.push({
+            key: `warning:unknown:${line.index}:${cell.position}:${cell.char}`,
+            level: 'warning',
+            title: '平仄未定',
+            detail: `第 ${line.index + 1} 句第 ${cell.position + 1} 字“${cell.char}”平仄尚未确认。`,
+            line: line.index,
+            position: cell.position,
+          });
+        }
+        const mark = version.marks[key(line.index, cell.position)];
+        const manuallyToned = !!mark && mark.tone !== '?' && !mark.basis.trim();
+        const manuallyRhymed = !!mark && !!mark.rhyme && !mark.basis.trim();
+        if (manuallyToned || manuallyRhymed) {
+          issues.push({
+            key: `warning:basis:${line.index}:${cell.position}:${cell.char}`,
+            level: 'warning',
+            title: '判断缺依据',
+            detail: `第 ${line.index + 1} 句第 ${cell.position + 1} 字“${cell.char}”已${manuallyRhymed ? '标韵组' : '定平仄'}，但未记录韵书或音义依据。`,
+            line: line.index,
+            position: cell.position,
+          });
+        }
+      });
+    });
+    const rhymeCells = template.rhymeLines
+      .map((lineIndex) => ({ lineIndex, cell: analysis[lineIndex]?.cells.at(-1) }))
+      .filter((item): item is { lineIndex: number; cell: AnalysisCell } => Boolean(item.cell));
+    const rhymeGroups = new Map<string, { char: string; line: number }[]>();
+    rhymeCells.forEach(({ lineIndex, cell }) => {
+      if (!cell.mark.rhyme) {
         issues.push({
-          id: uid('issue'),
-          level: 'error',
-          title: '出律位置',
-          detail: `第 ${line.index + 1} 句“${cell.char}”：${cell.message}`,
-          line: line.index,
+          key: `warning:rhyme-missing:${lineIndex}`,
+          level: 'warning',
+          title: '韵脚缺少韵部',
+          detail: `第 ${lineIndex + 1} 句末字“${cell.char}”尚未指定韵部。`,
+          line: lineIndex,
           position: cell.position,
         });
-      });
-      if (line.cells.some((cell) => cell.status === 'unknown')) {
-        issues.push({ id: uid('issue'), level: 'warning', title: '存在未标注字', detail: `第 ${line.index + 1} 句仍有平仄未确认。`, line: line.index });
-      }
-    });
-    const rhymeCells = template.rhymeLines.map((line) => analysis[line]?.cells.at(-1)).filter(Boolean);
-    const rhymeGroups = new Map<string, string[]>();
-    rhymeCells.forEach((cell) => {
-      if (!cell?.mark.rhyme) {
-        issues.push({ id: uid('issue'), level: 'warning', title: '韵脚缺少韵部', detail: `第 ${(cell?.position ?? 0) + 1} 句末字尚未指定韵部。` });
         return;
       }
-      rhymeGroups.set(cell.mark.rhyme, [...(rhymeGroups.get(cell.mark.rhyme) ?? []), cell.char]);
+      rhymeGroups.set(cell.mark.rhyme, [...(rhymeGroups.get(cell.mark.rhyme) ?? []), { char: cell.char, line: lineIndex }]);
     });
-    rhymeGroups.forEach((chars, rhyme) => {
-      const duplicate = chars.find((char, index) => chars.indexOf(char) !== index);
-      if (duplicate) issues.push({ id: uid('issue'), level: 'warning', title: '重复用韵', detail: `韵部 ${rhyme} 重复使用末字“${duplicate}”。` });
+    rhymeGroups.forEach((items, rhyme) => {
+      const duplicate = items.find((item) => items.some((other) => other !== item && other.char === item.char));
+      if (duplicate) {
+        const lines = items.filter((item) => item.char === duplicate.char).map((item) => `第 ${item.line + 1} 句`).join('、');
+        issues.push({
+          key: `warning:rhyme-dup:${rhyme}:${duplicate.char}`,
+          level: 'warning',
+          title: '重复用韵',
+          detail: `韵部 ${rhyme} 在${lines}重复使用末字“${duplicate.char}”。`,
+          line: duplicate.line,
+        });
+      }
     });
     if (version.antithesisPairs.length === 0) {
-      issues.push({ id: 'antithesis-empty', level: 'info', title: '尚未标记对仗', detail: '可在检视器中把两句建立对仗关系。' });
+      issues.push({ key: 'info:antithesis-empty', level: 'info', title: '尚未标记对仗', detail: '可在右侧把两句建立对仗关系。' });
     }
     if (!issues.some((issue) => issue.level === 'error')) {
-      issues.unshift({ id: 'meter-ok', level: 'info', title: '格律检查通过', detail: '当前未发现硬性出律，请继续核对可接受变体。' });
+      issues.unshift({ key: 'info:meter-ok', level: 'info', title: '格律检查通过', detail: '当前未发现硬性出律，请继续核对可接受变体。' });
     }
     return issues;
+  }
+
+  /** 进入待核队列的问题：出律、未定平仄、缺依据、用韵异常；纯提示性 info 不入队。 */
+  readonly queueIssues = computed<PoemIssue[]>(() => {
+    return this.issues().filter((issue) => issue.level === 'error' || issue.level === 'warning');
   });
+
+  readonly infoIssues = computed<PoemIssue[]>(() => {
+    return this.issues().filter((issue) => issue.level === 'info');
+  });
+
+  readonly queue = computed<{ issue: PoemIssue; status: ReviewStatus; decision?: ReviewDecision }[]>(() => {
+    const queue = this.activeVersion().reviewQueue;
+    return this.queueIssues().map((issue) => ({
+      issue,
+      status: queue[issue.key]?.status ?? 'pending',
+      decision: queue[issue.key],
+    }));
+  });
+
+  readonly queueStats = computed(() => {
+    const items = this.queue();
+    const pending = items.filter((item) => item.status === 'pending').length;
+    const resolved = items.filter((item) => item.status === 'resolved').length;
+    const ignored = items.filter((item) => item.status === 'ignored').length;
+    const total = items.length;
+    const reviewed = resolved + ignored;
+    return { total, pending, resolved, ignored, reviewed, percent: total === 0 ? 100 : Math.round((reviewed / total) * 100) };
+  });
+
+  resolveIssue(issueKey: string): void {
+    this.recordDecision(issueKey, 'resolved', '已处理：问题已核对并处理。');
+  }
+
+  ignoreIssue(issueKey: string, reason: string): string | null {
+    const trimmed = reason.trim();
+    if (!trimmed) return '忽略时必须填写原因，便于下一班核对。';
+    this.recordDecision(issueKey, 'ignored', trimmed);
+    return null;
+  }
+
+  reopenIssue(issueKey: string): void {
+    this.commit((workspace) => {
+      delete this.versionIn(workspace).reviewQueue[issueKey];
+    });
+  }
+
+  private recordDecision(issueKey: string, status: 'resolved' | 'ignored', reason: string): void {
+    this.commit((workspace) => {
+      const version = this.versionIn(workspace);
+      if (!this.issueKeysFor(version, this.templateFor(workspace)).has(issueKey)) return;
+      version.reviewQueue[issueKey] = {
+        status,
+        reason,
+        by: workspace.reviewer.trim() || '未署名',
+        at: new Date().toISOString(),
+      };
+    });
+  }
+
+  setReviewer(name: string): void {
+    this.commit((workspace) => {
+      workspace.reviewer = name;
+    });
+  }
 
   readonly diff = computed<CharDiff[]>(() => {
     const left = this.workspace().versions.find((version) => version.id === this.baselineVersionId());
@@ -389,13 +515,38 @@ export class PoetryStoreService {
   }
 
   exportProofreadCopy(): string {
+    const workspace = this.workspace();
     const active = this.activeVersion();
     const lines = this.analysis().map((line) => {
       const tags = line.cells.map((cell) => `${cell.char}${cell.actual === '?' ? '□' : `(${cell.actual})`}`).join(' ');
       return `第 ${line.index + 1} 句：${tags}`;
     });
-    const notes = this.issues().map((issue) => `[${issue.level.toUpperCase()}] ${issue.title}：${issue.detail}`);
-    return [`# ${this.workspace().title} · 格律校对稿`, '', `底本：${active.name}`, `出处：${active.source}`, '', '## 字音标注', ...lines, '', '## 检查记录', ...notes].join('\n');
+    const stats = this.queueStats();
+    const statusLabel: Record<ReviewStatus, string> = { pending: '待核', resolved: '已处理', ignored: '已忽略' };
+    const notes = this.issues().map((issue) => {
+      if (issue.level === 'info') return `- [提示] ${issue.title}：${issue.detail}`;
+      const decision = active.reviewQueue[issue.key];
+      const head = `- [${issue.level === 'error' ? '出律' : '待核'}] ${issue.title}：${issue.detail}`;
+      if (!decision) return `${head}　**【${statusLabel.pending}】**`;
+      return `${head}　**【${statusLabel[decision.status]}】** ${decision.reason}（${decision.by} · ${formatStamp(decision.at)}）`;
+    });
+    return [
+      `# ${workspace.title} · 格律校对稿`,
+      '',
+      `底本：${active.name}`,
+      `出处：${active.source}`,
+      `当班校对：${workspace.reviewer.trim() || '未署名'}`,
+      `导出时间：${formatStamp(new Date().toISOString())}`,
+      '',
+      '## 字音标注',
+      ...lines,
+      '',
+      '## 待核队列进度',
+      `共 ${stats.total} 条：待核 ${stats.pending} 条，已处理 ${stats.resolved} 条，已忽略 ${stats.ignored} 条；完成 ${stats.percent}%。`,
+      '',
+      '## 检查记录',
+      ...notes,
+    ].join('\n');
   }
 
   downloadProofreadCopy(): void {
@@ -411,16 +562,42 @@ export class PoetryStoreService {
   }
 
   private commit(mutator: (workspace: PoemWorkspace) => void): void {
-    this.undoStack.push(clone(this.workspace()));
+    const previous = clone(this.workspace());
+    this.undoStack.push(previous);
     if (this.undoStack.length > 80) this.undoStack.shift();
     this.redoStack = [];
     const next = clone(this.workspace());
     mutator(next);
     next.updatedAt = new Date().toISOString();
+    this.reconcileQueue(previous, next);
     this.workspace.set(next);
     this.undoCount.set(this.undoStack.length);
     this.redoCount.set(0);
     this.persist();
+  }
+
+  /**
+   * 正文、字音标注或模板改动后重新计算问题指纹：
+   * 只保留仍对得上同一条问题的处理结论，问题消失或位置/要素变动的结论作废、重新待核。
+   */
+  private reconcileQueue(before: PoemWorkspace, after: PoemWorkspace): void {
+    after.versions.forEach((version) => {
+      const previous = before.versions.find((item) => item.id === version.id);
+      if (!previous || !Object.keys(version.reviewQueue).length) return;
+      // 始终以最新正文、字音标注与模板重算指纹；无变化时指纹集合相同，不会误删结论。
+      const valid = this.issueKeysFor(version, this.templateFor(after));
+      Object.keys(version.reviewQueue).forEach((key) => {
+        if (!valid.has(key)) delete version.reviewQueue[key];
+      });
+    });
+  }
+
+  private templateFor(workspace: PoemWorkspace): MeterTemplate {
+    return METER_TEMPLATES.find((item) => item.id === workspace.templateId) ?? METER_TEMPLATES[0];
+  }
+
+  private issueKeysFor(version: PoemVersion, template: MeterTemplate): Set<string> {
+    return new Set(this.buildIssues(version, template).map((issue) => issue.key));
   }
 
   private versionIn(workspace: PoemWorkspace): PoemVersion {

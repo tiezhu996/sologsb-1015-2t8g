@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, HostListener, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, HostListener, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { NzAlertModule } from 'ng-zorro-antd/alert';
@@ -13,7 +13,16 @@ import { NzSwitchModule } from 'ng-zorro-antd/switch';
 import { NzTabsModule } from 'ng-zorro-antd/tabs';
 import { NzTagModule } from 'ng-zorro-antd/tag';
 import { NzToolTipModule } from 'ng-zorro-antd/tooltip';
-import { METER_TEMPLATES, PoetryStoreService } from './services/poetry-store.service';
+import { formatStamp, METER_TEMPLATES, PoetryStoreService } from './services/poetry-store.service';
+import type { PoemIssue, ReviewDecision, ReviewStatus } from './models/poem.models';
+
+type QueueFilter = 'all' | ReviewStatus;
+
+interface QueueItem {
+  issue: PoemIssue;
+  status: ReviewStatus;
+  decision?: ReviewDecision;
+}
 
 @Component({
   selector: 'app-root',
@@ -42,6 +51,31 @@ export class AppComponent {
   readonly templates = METER_TEMPLATES;
   readonly selectedCell = computed(() => this.store.selectedCell());
 
+  readonly queueFilter = signal<QueueFilter>('all');
+  readonly ignoringKey = signal('');
+  readonly ignoreReason = signal('');
+  readonly ignoreError = signal('');
+  readonly formatStamp = formatStamp;
+
+  readonly filteredQueue = computed<QueueItem[]>(() => {
+    const filter = this.queueFilter();
+    const items = this.store.queue();
+    return filter === 'all' ? items : items.filter((item) => item.status === filter);
+  });
+
+  readonly filters: { value: QueueFilter; label: string }[] = [
+    { value: 'all', label: '全部' },
+    { value: 'pending', label: '待核' },
+    { value: 'resolved', label: '已处理' },
+    { value: 'ignored', label: '已忽略' },
+  ];
+
+  readonly statusLabel: Record<ReviewStatus, string> = {
+    pending: '待核',
+    resolved: '已处理',
+    ignored: '已忽略',
+  };
+
   get totalErrors(): number {
     return this.store.issues().filter((issue) => issue.level === 'error').length;
   }
@@ -66,6 +100,51 @@ export class AppComponent {
 
   updateVersionSource(source: string): void {
     this.store.updateVersionSource(source);
+  }
+
+  setQueueFilter(filter: QueueFilter): void {
+    this.queueFilter.set(filter);
+  }
+
+  locateIssue(issue: PoemIssue): void {
+    if (issue.line !== undefined) this.store.selectCell(issue.line, issue.position ?? 0);
+  }
+
+  markResolved(item: QueueItem): void {
+    this.cancelIgnore();
+    this.store.resolveIssue(item.issue.key);
+  }
+
+  startIgnore(item: QueueItem): void {
+    this.ignoringKey.set(item.issue.key);
+    this.ignoreReason.set('');
+    this.ignoreError.set('');
+  }
+
+  cancelIgnore(): void {
+    this.ignoringKey.set('');
+    this.ignoreReason.set('');
+    this.ignoreError.set('');
+  }
+
+  confirmIgnore(): void {
+    const key = this.ignoringKey();
+    if (!key) return;
+    const error = this.store.ignoreIssue(key, this.ignoreReason());
+    if (error) {
+      this.ignoreError.set(error);
+      return;
+    }
+    this.cancelIgnore();
+  }
+
+  reopen(item: QueueItem): void {
+    this.cancelIgnore();
+    this.store.reopenIssue(item.issue.key);
+  }
+
+  trackIssue(index: number, item: QueueItem): string {
+    return item.issue.key;
   }
 
   trackTemplate(index: number, item: (typeof METER_TEMPLATES)[number]): string {
