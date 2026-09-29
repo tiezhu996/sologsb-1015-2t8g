@@ -43,3 +43,7 @@ Thumbs.db
 
 # local npm cache used during constrained network installs
 .npm-cache
+
+# locally downloaded headless browser and machine-specific karma settings
+/.browsers
+/karma.local.conf.js

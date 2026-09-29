@@ -187,6 +187,63 @@ kbd { display: inline-grid; min-width: 21px; height: 21px; padding: 0 5px; place
 .issue-row strong { font-size: 12px; }
 .issue-row small { margin-top: 3px; font-size: 10px; opacity: .8; }
 .issue-row em { font-size: 9px; font-style: normal; }
+
+.queue-head h2 { font: 650 17px/1.3 "Songti SC", "STSong", serif; }
+.queue-progress { padding: 14px 16px 10px; border-bottom: 1px solid #e9e5dc; background: linear-gradient(180deg, #f8f7f1, #fdfcf9); border-radius: 13px 13px 0 0; }
+.progress-copy { display: flex; align-items: baseline; gap: 12px; }
+.progress-copy strong { font-size: 22px; color: #345f52; }
+.progress-copy span { color: #817c71; font-size: 11px; }
+.queue-progress ::ng-deep .ant-progress { display: block; margin-top: 8px; }
+.reviewer-line { display: flex; align-items: center; gap: 9px; margin-top: 10px; }
+.reviewer-line label { color: #8d887c; font-size: 11px; white-space: nowrap; }
+.reviewer-line input { flex: 1; max-width: 280px; }
+
+.queue-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 11px 14px 0; }
+.filter-chip {
+  padding: 4px 12px;
+  border: 1px solid #d8d2c5;
+  border-radius: 999px;
+  color: #777266;
+  background: #fbfaf6;
+  font-size: 11px;
+  cursor: pointer;
+  transition: .15s ease;
+}
+.filter-chip:hover { border-color: #aab5a4; }
+.filter-chip.is-active { color: #fff; background: #3d6d5e; border-color: #3d6d5e; }
+.filter-chip.pending.is-active { background: #b4812f; border-color: #b4812f; }
+.filter-chip.ignored.is-active { background: #a35d3f; border-color: #a35d3f; }
+
+.queue-list { gap: 8px; }
+.issue-card {
+  padding: 11px 12px;
+  border: 1px solid #e5e0d5;
+  border-left-width: 3px;
+  border-radius: 9px;
+  background: #f7f7f3;
+}
+.issue-card.level-error { border-left-color: #bd4a42; background: #fbefed; }
+.issue-card.level-warning { border-left-color: #ca9438; background: #fbf7ec; }
+.issue-card:not(.is-pending) { opacity: .82; }
+.issue-main { display: grid; grid-template-columns: 29px 1fr auto; align-items: start; gap: 10px; cursor: pointer; }
+.issue-main .issue-symbol { width: 26px; height: 26px; font-size: 12px; color: currentColor; }
+.issue-body strong { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; }
+.issue-loc { font-style: normal; color: #9a9488; font-size: 10px; font-weight: 400; }
+.issue-body small { display: block; margin-top: 3px; font-size: 10px; opacity: .82; line-height: 1.6; }
+.status-tag { margin: 0; align-self: center; }
+.review-record { margin: 8px 0 2px 39px; padding: 8px 10px; border-radius: 7px; background: rgba(255, 255, 252, .72); }
+.review-reason { font-size: 11px; color: #5f5644; line-height: 1.6; }
+.review-meta { margin-top: 3px; color: #999285; font-size: 9px; }
+.issue-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.ignore-editor { margin: 8px 0 2px 39px; padding: 9px; border-radius: 8px; background: rgba(255, 255, 252, .9); border: 1px solid #e0dacb; }
+.ignore-editor-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 7px; }
+.ignore-editor-foot small { color: #a9a296; font-size: 10px; }
+.ignore-editor-foot small.has-error { color: #c0473f; }
+.ignore-editor-foot span { display: flex; gap: 6px; }
+.queue-empty { padding: 26px 0; }
+.queue-notes { padding: 4px 16px 15px; }
+.queue-notes .overline { margin-bottom: 6px; }
+.info-line { margin-top: 5px; color: #4d6d61; font-size: 11px; line-height: 1.6; }
 .antithesis-panel { padding-bottom: 12px; }
 .pair-list { padding: 10px; display: grid; gap: 8px; }
 .pair-card { padding: 11px; border: 1px solid #e4dfd4; border-radius: 9px; background: #fbfaf6; }

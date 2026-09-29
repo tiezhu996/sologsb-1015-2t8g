@@ -17,6 +17,8 @@ export interface PoemVersion {
   text: string;
   marks: Record<string, CharacterMark>;
   antithesisPairs: AntithesisPair[];
+  /** 待核队列中各问题的处理结论，按问题稳定指纹存放 */
+  reviews: ReviewRecord[];
 }
 
 export interface AntithesisPair {
@@ -63,13 +65,53 @@ export interface AnalysisLine {
   variants: number;
 }
 
+/** 检查问题类别，决定稳定指纹的构成 */
+export type IssueKind =
+  | 'meter-error'
+  | 'tone-unknown'
+  | 'missing-basis'
+  | 'rhyme-missing'
+  | 'rhyme-duplicate'
+  | 'antithesis-empty'
+  | 'meter-ok';
+
 export interface PoemIssue {
-  id: string;
+  /** 稳定指纹：类型 + 位置 + 相关字与模板状态，任一变化即生成新问题 */
+  key: string;
+  kind: IssueKind;
   level: 'error' | 'warning' | 'info';
   title: string;
   detail: string;
   line?: number;
   position?: number;
+  char?: string;
+  /** 硬性出律、平仄未定、缺依据等待办项为 true；总体提示不入待核队列 */
+  trackable: boolean;
+}
+
+export type ReviewStatus = 'resolved' | 'ignored';
+
+export interface ReviewRecord {
+  /** 对应 PoemIssue.key */
+  issueKey: string;
+  status: ReviewStatus;
+  /** 忽略时必填；已处理时可为补充说明 */
+  reason: string;
+  handledBy: string;
+  handledAt: string;
+}
+
+export interface QueueItem {
+  issue: PoemIssue;
+  record?: ReviewRecord;
+}
+
+export interface QueueStats {
+  total: number;
+  resolved: number;
+  ignored: number;
+  pending: number;
+  percent: number;
 }
 
 export interface CharDiff {

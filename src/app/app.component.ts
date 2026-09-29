@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, HostListener, computed, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, HostListener, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { NzAlertModule } from 'ng-zorro-antd/alert';
@@ -13,7 +13,10 @@ import { NzSwitchModule } from 'ng-zorro-antd/switch';
 import { NzTabsModule } from 'ng-zorro-antd/tabs';
 import { NzTagModule } from 'ng-zorro-antd/tag';
 import { NzToolTipModule } from 'ng-zorro-antd/tooltip';
+import type { QueueItem } from './models/poem.models';
 import { METER_TEMPLATES, PoetryStoreService } from './services/poetry-store.service';
+
+type QueueFilter = 'all' | 'pending' | 'resolved' | 'ignored';
 
 @Component({
   selector: 'app-root',
@@ -42,12 +45,23 @@ export class AppComponent {
   readonly templates = METER_TEMPLATES;
   readonly selectedCell = computed(() => this.store.selectedCell());
 
+  readonly queueFilter = signal<QueueFilter>('all');
+  /** 当前展开「忽略原因」输入的问题指纹 */
+  readonly ignoreDraftKey = signal('');
+  readonly ignoreReason = signal('');
+  readonly ignoreError = signal(false);
+
+  readonly filteredQueue = computed<QueueItem[]>(() => {
+    const filter = this.queueFilter();
+    return this.store.queue().filter((item) => {
+      if (filter === 'all') return true;
+      if (filter === 'pending') return !item.record;
+      return item.record?.status === filter;
+    });
+  });
+
   get totalErrors(): number {
     return this.store.issues().filter((issue) => issue.level === 'error').length;
-  }
-
-  get totalWarnings(): number {
-    return this.store.issues().filter((issue) => issue.level === 'warning').length;
   }
 
   get checkedRate(): number {
@@ -66,6 +80,39 @@ export class AppComponent {
 
   updateVersionSource(source: string): void {
     this.store.updateVersionSource(source);
+  }
+
+  updateReviewer(name: string): void {
+    this.store.setReviewerName(name);
+  }
+
+  setQueueFilter(filter: QueueFilter): void {
+    this.queueFilter.set(filter);
+    this.cancelIgnoreDraft();
+  }
+
+  startIgnoreDraft(item: QueueItem): void {
+    this.ignoreDraftKey.set(item.issue.key);
+    this.ignoreReason.set(item.record?.status === 'ignored' ? item.record.reason : '');
+    this.ignoreError.set(false);
+  }
+
+  cancelIgnoreDraft(): void {
+    this.ignoreDraftKey.set('');
+    this.ignoreReason.set('');
+    this.ignoreError.set(false);
+  }
+
+  submitIgnore(key: string): void {
+    if (this.store.ignoreIssue(key, this.ignoreReason())) {
+      this.cancelIgnoreDraft();
+    } else {
+      this.ignoreError.set(true);
+    }
+  }
+
+  trackItem(_index: number, item: QueueItem): string {
+    return item.issue.key;
   }
 
   trackTemplate(index: number, item: (typeof METER_TEMPLATES)[number]): string {
